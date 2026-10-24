@@ -38,7 +38,7 @@ namespace headsetcontrol {
  * - Battery status   (CMD 0x06) — reply byte6 = %, byte8 = dock/charging flag
  * - Chatmix          (CMD 0x0a) — value 0..12 (0 = chat/voice, 12 = game)
  * - Sidetone         (CMD 0x09) — payload 01 ff <level>
- * - Master volume    (CMD 0x08) — SET handle 0x1b, payload ff <0..21>
+ * - Master volume    (CMD 0x08) — SET handle 0x1b, payload ff <0..21>; GET reply byte8 = <0..21>
  * - Lights/dock LED  (CMD 0x0f) — payload <brightness 0..100>
  * - Parametric EQ    (CMD 0x0d) — 10 bands [freqBE16][Q LE16][gainB]; Q=scale/32,
  *                                 gain byte=120+dB*20 (±6 dB).
@@ -73,6 +73,7 @@ public:
 
     // Transaction handles (byte[5]) — observed per command in captures
     static constexpr uint8_t HANDLE_VOLUME_SET = 0x1b;
+    static constexpr uint8_t HANDLE_VOLUME_GET = 0x0c;
     static constexpr uint8_t HANDLE_CHATMIX    = 0x0c;
     static constexpr uint8_t HANDLE_SIDETONE   = 0x1c;
     static constexpr uint8_t HANDLE_BRIGHTNESS = 0x1c;
@@ -116,6 +117,11 @@ public:
         return B(CAP_BATTERY_STATUS) | B(CAP_CHATMIX_STATUS) | B(CAP_SIDETONE) | B(CAP_LIGHTS)
             | B(CAP_PARAMETRIC_EQUALIZER) | B(CAP_NOISE_FILTER)
             | B(CAP_HEADSET_VOLUME);
+    }
+
+    constexpr int getReadableCapabilities() const override
+    {
+        return B(CAP_HEADSET_VOLUME);
     }
 
     constexpr capability_detail getCapabilityDetail([[maybe_unused]] enum capabilities cap) const override
@@ -232,6 +238,29 @@ public:
 
         return HeadsetVolumeResult {
             .volume        = volume,
+            .min_volume    = 0,
+            .max_volume    = 128,
+            .device_min    = 0,
+            .device_max    = VOLUME_LEVELS - 1,
+            .device_volume = device_level,
+        };
+    }
+
+    Result<HeadsetVolumeResult> getHeadsetVolume(hid_device* device_handle) override
+    {
+        // GET: 02 0c 03 00 08 0c   reply: byte8 = level 0..21 (byte6 is an undecoded raw value)
+        auto resp = sendRequest(device_handle, CMD_VOLUME, HANDLE_VOLUME_GET, {}, /*read_reply=*/true);
+        if (!resp) {
+            return resp.error();
+        }
+
+        const uint8_t device_level = (*resp)[8];
+        if (device_level >= VOLUME_LEVELS) {
+            return DeviceError::protocolError("ASTRO A50: volume level out of range");
+        }
+
+        return HeadsetVolumeResult {
+            .volume        = mapDiscreteToSidetone<VOLUME_LEVELS>(device_level),
             .min_volume    = 0,
             .max_volume    = 128,
             .device_min    = 0,
