@@ -248,7 +248,8 @@ public:
 
     Result<HeadsetVolumeResult> getHeadsetVolume(hid_device* device_handle) override
     {
-        // GET: 02 0c 03 00 08 0c   reply: byte8 = level 0..21 (byte6 is an undecoded raw value)
+        // GET (verified): 02 0c 03 00 08 0c   reply: 02 0c 06 00 08 0c <raw> 00 <level 0..21>
+        // byte6 is an undecoded raw value (0x11 at level 12).
         auto resp = sendRequest(device_handle, CMD_VOLUME, HANDLE_VOLUME_GET, {}, /*read_reply=*/true);
         if (!resp) {
             return resp.error();
@@ -342,9 +343,10 @@ private:
      * @brief Build a vendor frame, write it, and (optionally) read the matching reply.
      *
      * @param read_reply  When true, polls reads and returns the first 64-byte frame
-     *                    whose marker matches and whose CMD byte equals @p cmd
-     *                    (ignoring unrelated async push frames). When false, returns
-     *                    an empty frame after a successful write (fire-and-forget SET).
+     *                    whose marker matches, whose CMD byte equals @p cmd and that
+     *                    carries a payload (ignoring unrelated async push frames and
+     *                    bare SET acks). When false, returns an empty frame after a
+     *                    successful write (fire-and-forget SET).
      */
     [[nodiscard]] Result<std::array<uint8_t, FRAME_SIZE>> sendRequest(
         hid_device* device_handle,
@@ -381,11 +383,13 @@ private:
             if (*read_result == 0) {
                 continue; // timed out with no data; retry
             }
-            if (response[0] == REPORT_ID && response[1] == MARKER && response[4] == cmd) {
+            if (response[0] == REPORT_ID && response[1] == MARKER && response[4] == cmd && response[2] > 3) {
                 return response;
             }
-            // Otherwise it is an unrelated asynchronous push (volume, mic, BT, …);
-            // keep polling for the frame that answers our command.
+            // Otherwise it is an unrelated asynchronous push (volume, mic, BT, …) or a
+            // bare SET ack (02 0c 03 00 CMD HANDLE, no payload) — a fire-and-forget SET
+            // leaves its ack to whoever reads next; keep polling for the frame that
+            // answers our command.
         }
 
         return DeviceError::timeout("ASTRO A50: no response for command");

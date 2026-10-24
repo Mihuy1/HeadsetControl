@@ -1482,6 +1482,18 @@ void testAstroA50Gen5VolumeGet()
         ASSERT_EQ(15, result->device_volume, "Volume read should use the CMD 0x08 frame");
     }
 
+    // A previous SET's ack (02 0c 03 00 08 1b, no payload) is skipped, not read as level 0.
+    // Captured on hardware: --volume 64 exits before its ack arrives, so the next read gets it.
+    {
+        TestableAstroA50Gen5 dev;
+        dev.hid.replies.emplace_back(a50Gen5Frame(Dev::CMD_VOLUME, Dev::HANDLE_VOLUME_SET, {}));
+        dev.hid.replies.emplace_back(a50Gen5Frame(Dev::CMD_VOLUME, Dev::HANDLE_VOLUME_GET, { 0x11, 0x00, 0x0c }));
+
+        auto result = dev.getHeadsetVolume(nullptr);
+        ASSERT_TRUE(result.hasValue(), "Volume read should skip a stale SET ack");
+        ASSERT_EQ(12, result->device_volume, "Volume read should use the GET reply, not the ack");
+    }
+
     // A level past 21 is a protocol error, not a clamped value
     {
         TestableAstroA50Gen5 dev;
